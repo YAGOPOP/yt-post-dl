@@ -1,9 +1,25 @@
+use std::str::Bytes;
+
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     // let initial_post_url = inquire::Text::new("A:").prompt()?;
 
-    // let client = reqwest::blocking::Client::builder()
-    // .use_rustls_tls()
-    // .build()?;
+    let src_file = rfd::FileDialog::new()
+        .set_title("Выберите файл с ссылками")
+        .pick_file()
+        .ok_or("Ошибка выбора файла")?;
+
+    let contents = std::fs::read_to_string(src_file)?;
+
+
+    for link in contents.split("\n") {
+        if link.is_empty() {
+            continue;
+        }
+
+        // pollster::block_on(get_img_url_from_post_url(client, post_url))
+    }
+
+
 
     let initial_post_url = "https://www.youtube.com/post/Ugkx4cdNJgZPYbhSLRehjUHywEwBNlpn7A_f?lc=UgyEejCqC_ilo-zLj_N4AaABAg&si=T7DNr0-442WYtlKS";
 
@@ -34,4 +50,24 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-// pub fn sanitize
+async fn get_img_url_from_post_url(
+    client: &reqwest::Client,
+    post_url: &url::Url,
+) -> Result<String, Box<dyn std::error::Error>> {
+    let resp_text = client
+        .get(post_url.clone())
+        .send()
+        .await?
+        .error_for_status()?
+        .text()
+        .await?;
+
+    let needle = r#"<meta property="og:image" content=""#;
+    let start = resp_text.find(needle).ok_or("og:image not found")? + needle.len();
+    let rest = &resp_text[start..];
+    let end = rest.find("=s").ok_or("FOUND INVALID OG IMAGE ADDRESS")?;
+
+    Ok(format!("{}0", &rest[..end + 2]))
+}
+
+
