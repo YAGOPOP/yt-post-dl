@@ -71,7 +71,7 @@ async fn file_from_indirect_url(
             return Ok(());
         }
     };
-    
+
     let img_url = prep_link(&dirty_img_url)?;
 
     let img_response = client.get(img_url).send().await?;
@@ -112,10 +112,25 @@ fn figure_out_response_file_extension(hv: &header::HeaderMap) -> ResultAsyncDyn<
     }
 }
 
-fn read_strings() -> ResultAsyncDyn<Vec<String>> {
-    let stdin = std::io::stdin();
+// fn read_strings() -> ResultAsyncDyn<Vec<String>> {
+//     let stdin = std::io::stdin();
 
-    Ok(stdin.lock().lines().collect::<Result<Vec<_>, _>>()?)
+//     Ok(stdin.lock().lines().collect::<Result<Vec<_>, _>>()?)
+// }
+
+fn read_strings() -> Result<Vec<String>, std::io::Error> {
+    let stdin = std::io::stdin();
+    let mut result = Vec::new();
+
+    for line in stdin.lock().lines() {
+        let line = line?;
+        if line.is_empty() {
+            break;
+        }
+        result.push(line);
+    }
+
+    Ok(result)
 }
 
 fn extract_links(lines: &[String]) -> Vec<String> {
