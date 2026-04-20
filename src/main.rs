@@ -1,5 +1,5 @@
 use std::io::BufRead;
-
+use std::sync::atomic::{AtomicUsize, Ordering};
 // use std::str::FromStr;
 use chrono;
 
@@ -8,10 +8,12 @@ use url::Url;
 
 type ResultAsyncDyn<T> = Result<T, Box<dyn std::error::Error + Send + Sync>>;
 
+static FILE_COUNTER: AtomicUsize = AtomicUsize::new(1);
+
 #[tokio::main]
 async fn main() -> ResultAsyncDyn<()> {
-    let client = Client::builder().tls_backend_native().build()?;
 
+    let client = Client::builder().tls_backend_native().build()?;
     let write_dir = std::path::PathBuf::from("./obtained");
 
     let mut handles = Vec::new();
@@ -67,7 +69,8 @@ async fn file_from_indirect_url(
     let img_response = client.get(img_url).send().await?;
 
     let filename = format!(
-        "image{}.{}",
+        "image-{}-{}.{}",
+        FILE_COUNTER.fetch_add(1, Ordering::Relaxed),
         chrono::Local::now().format("%Y-%m-%d_%H-%M-%S"),
         figure_out_response_file_extension(&img_response.headers())?
     );
