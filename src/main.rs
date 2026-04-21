@@ -5,6 +5,7 @@ use std::collections::HashSet;
 use std::io::BufRead;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use url::Url;
+use arboard::Clipboard;
 
 type ResultAsyncDyn<T> = Result<T, Box<dyn std::error::Error + Send + Sync>>;
 
@@ -121,6 +122,7 @@ fn figure_out_response_file_extension(hv: &header::HeaderMap) -> ResultAsyncDyn<
 //     Ok(stdin.lock().lines().collect::<Result<Vec<_>, _>>()?)
 // }
 
+#[allow(unused)]
 fn read_strings() -> Result<Vec<String>, std::io::Error> {
     let stdin = std::io::stdin();
     let mut result = Vec::new();
@@ -147,7 +149,8 @@ fn extract_link(line: &str) -> Option<String> {
 }
 
 fn obtain_links() -> ResultAsyncDyn<Vec<String>> {
-    let lines = read_strings()?;
+    // let lines = read_strings()?;
+    let lines = read_strings_from_clipboard()?;
     Ok(extract_links(&lines))
 }
 
@@ -161,4 +164,16 @@ fn extract_all_ggpht_urls(body: &str) -> HashSet<String> {
     }
 
     out
+}
+
+
+fn read_strings_from_clipboard() -> Result<Vec<String>, arboard::Error> {
+    let mut clpbrd = Clipboard::new()?;
+    let text = clpbrd.get_text()?;
+
+    let mut res = Vec::new();
+    for line in text.split("\n") {
+        res.push(line.to_owned());
+    }
+    Ok(res)
 }

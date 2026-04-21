@@ -4,6 +4,7 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+arboard = { version = "3.6.1", features = ["wayland-data-control"] }
 chrono = "0.4.44"
 # inquire = "0.9.4"
 # pollster = "0.4.0"
