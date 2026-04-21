@@ -6,9 +6,11 @@ edition = "2024"
 [dependencies]
 arboard = { version = "3.6.1", features = ["wayland-data-control"] }
 chrono = "0.4.44"
+# clap = { version = "4.6.1", features = ["derive"] }
+linkify = "0.11.0"
 # inquire = "0.9.4"
 # pollster = "0.4.0"
-regex = "1.12.3"
+# regex = "1.12.3"
 reqwest = { version = "0.13.2",  default-features = false, features = ["blocking", "native-tls"] }
 # rfd = "0.17.2"
 # scraper = "0.26.0"

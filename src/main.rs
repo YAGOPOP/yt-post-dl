@@ -1,11 +1,13 @@
+use arboard::Clipboard;
 use chrono;
-use regex::Regex;
+use linkify::{LinkFinder, LinkKind};
 use reqwest::{Client, header};
+use tokio::io::AsyncWriteExt;
 use std::collections::HashSet;
 use std::io::BufRead;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use url::Url;
-use arboard::Clipboard;
 
 type ResultAsyncDyn<T> = Result<T, Box<dyn std::error::Error + Send + Sync>>;
 
@@ -14,17 +16,19 @@ static FILE_COUNTER: AtomicUsize = AtomicUsize::new(1);
 #[tokio::main]
 async fn main() -> ResultAsyncDyn<()> {
     let client = Client::builder().tls_backend_native().build()?;
-    let write_dir = std::path::PathBuf::from("./obtained");
+    let write_dir = PathBuf::from("./obtained");
 
     let links = obtain_links()?;
-    println!("Ввод обработан, скачивание...");
+    println!("Ввод обработан, скачивание...\n");
     let mut handles = Vec::new();
     for link in links {
-        handles.push(tokio::spawn({
-            file_from_indirect_url_own(link, client.clone(), write_dir.clone())
+        let client = client.clone();
+        let write_dir = write_dir.clone();
+
+        handles.push(tokio::spawn(async move {
+            dload_imgs_from_post(&link, &client, &write_dir).await
         }));
     }
-
     for handle in handles {
         handle.await??;
     }
@@ -32,49 +36,36 @@ async fn main() -> ResultAsyncDyn<()> {
     Ok(())
 }
 
-fn prep_link(raw_link: &str) -> ResultAsyncDyn<Url> {
-    let mut link = Url::parse(raw_link)?;
-    link.set_query(None);
-    Ok(link)
-}
-
-async fn file_from_indirect_url_own(
-    indirect_url: String,
-    client: Client,
-    write_dir: std::path::PathBuf,
-) -> ResultAsyncDyn<()> {
-    file_from_indirect_url(&indirect_url, &client, &write_dir).await
-}
-
-async fn file_from_indirect_url(
+async fn dload_imgs_from_post(
     indirect_url: &str,
     client: &Client,
-    write_dir: &std::path::PathBuf,
+    write_dir: &Path,
 ) -> ResultAsyncDyn<()> {
-    let link = prep_link(indirect_url)?;
-    let resp = client.get(link).send().await?;
+    let resp = client.get(indirect_url).send().await?.error_for_status()?;
 
     let resp_text = resp.text().await?;
 
-    let img_urls = extract_all_ggpht_urls(&resp_text);
+    let img_urls = extract_links(&resp_text, sanitize_ggpht_url);
 
     for img_url in img_urls {
-        println!("Скачивается: {}", &img_url);
         file_from_url(&img_url, &client, &write_dir).await?
     }
 
     Ok(())
 }
 
-async fn file_from_url(
-    img_url: &str,
-    client: &Client,
-    write_dir: &std::path::PathBuf,
-) -> ResultAsyncDyn<()> {
-    let img_response = match client.get(img_url).send().await {
-        Ok(r) => r,
+async fn file_from_url(img_url: &str, client: &Client, write_dir: &Path) -> ResultAsyncDyn<()> {
+    println!("Скачивается: {}", &img_url);
+    let mut img_response = match client.get(img_url).send().await {
+        Ok(r) => match r.error_for_status() {
+            Ok(r) => r,
+            Err(err) => {
+                eprintln!("Пропускаю {img_url}: bad status: {err}");
+                return Ok(());
+            }
+        },
         Err(err) => {
-            eprintln!("Пропускаю {img_url}: extract_file_url failed: {err}");
+            eprintln!("Пропускаю {img_url}: request failed: {err}");
             return Ok(());
         }
     };
@@ -85,22 +76,24 @@ async fn file_from_url(
         chrono::Local::now().format("%Y-%m-%d_%H-%M-%S"),
         figure_out_response_file_extension(&img_response.headers())?
     );
+    let write_path = write_dir.join(&filename);
 
-    let img_bytes = img_response.bytes().await?;
+    let mut file = tokio::fs::File::create(&write_path).await?;
+    while let Some(chunk) = img_response.chunk().await? {
+        file.write_all(&chunk).await?;
+    }
 
-    let write_parh = write_dir.join(&filename);
-    tokio::fs::write(&write_parh, &img_bytes).await?;
     println!("Записан файл: {}", &filename);
 
     Ok(())
 }
 
-fn figure_out_response_file_extension(hv: &header::HeaderMap) -> ResultAsyncDyn<String> {
+fn figure_out_response_file_extension(hv: &header::HeaderMap) -> ResultAsyncDyn<&'static str> {
     match hv.get(header::CONTENT_TYPE) {
         Some(t) => match t.to_str()? {
-            "image/jpeg" => Ok("jpeg".to_owned()),
-            "image/gif" => Ok("gif".to_owned()),
-            "image/png" => Ok("png".to_owned()),
+            "image/jpeg" => Ok("jpeg"),
+            "image/gif" => Ok("gif"),
+            "image/png" => Ok("png"),
             ut => {
                 return Err(
                     format!("Ошибка: не предусмотренный тип контента в ответе: {}", ut).into(),
@@ -116,64 +109,82 @@ fn figure_out_response_file_extension(hv: &header::HeaderMap) -> ResultAsyncDyn<
     }
 }
 
-// fn read_strings() -> ResultAsyncDyn<Vec<String>> {
-//     let stdin = std::io::stdin();
-
-//     Ok(stdin.lock().lines().collect::<Result<Vec<_>, _>>()?)
-// }
-
 #[allow(unused)]
-fn read_strings() -> Result<Vec<String>, std::io::Error> {
+fn read_strings_from_terminal() -> Result<String, std::io::Error> {
     let stdin = std::io::stdin();
-    let mut result = Vec::new();
+    let mut result = String::new();
 
     for line in stdin.lock().lines() {
         let line = line?;
         if line.is_empty() {
             break;
         }
-        result.push(line);
+        result.push_str(" ");
+        result.push_str(&line);
     }
 
     Ok(result)
 }
 
-fn extract_links(lines: &[String]) -> Vec<String> {
-    lines.iter().filter_map(|line| extract_link(line)).collect()
+fn extract_links(text: &str, sanitize: fn(Url) -> Option<String>) -> HashSet<String> {
+    let mut res = HashSet::new();
+
+    let mut finder = LinkFinder::new();
+    finder.kinds(&[LinkKind::Url]);
+
+    for link in finder.links(text) {
+        let raw = link.as_str();
+        if let Ok(l) = Url::parse(raw)
+            && let Some(link) = sanitize(l)
+        {
+            res.insert(link);
+        }
+    }
+    res
 }
 
-fn extract_link(line: &str) -> Option<String> {
-    line.split_whitespace()
-        .find(|part| part.starts_with("http://") || part.starts_with("https://"))
-        .map(str::to_string)
-}
-
-fn obtain_links() -> ResultAsyncDyn<Vec<String>> {
-    // let lines = read_strings()?;
-    let lines = read_strings_from_clipboard()?;
-    Ok(extract_links(&lines))
-}
-
-fn extract_all_ggpht_urls(body: &str) -> HashSet<String> {
-    let re = Regex::new(r#"https://yt3\.ggpht\.com/[^"'<>\s\\=]+="#).unwrap();
-
-    let mut out = HashSet::new();
-    for m in re.find_iter(body) {
-        let url = format!("{}s0", m.as_str());
-        out.insert(url);
+fn sanitize_yt_post_url(mut url: Url) -> Option<String> {
+    let host = url.host_str()?;
+    if !is_domain_or_subdomain(host, "youtube.com") {
+        return None;
     }
 
-    out
+    if url.path_segments()?.next() != Some("post") {
+        return None;
+    }
+
+    url.set_query(None);
+    Some(url.as_str().to_owned())
 }
 
+fn sanitize_ggpht_url(url: Url) -> Option<String> {
+    if url.host_str()? != "yt3.ggpht.com" {
+        return None;
+    }
 
-fn read_strings_from_clipboard() -> Result<Vec<String>, arboard::Error> {
+    let str_url = url.as_str(); 
+    let i = str_url.find("=")?;
+
+    Some(format!("{}s0", &str_url[..=i]))
+}
+
+fn is_domain_or_subdomain(host: &str, domain: &str) -> bool {
+    host == domain
+        || host
+            .strip_suffix(domain)
+            .is_some_and(|prefix| prefix.ends_with('.'))
+}
+
+fn obtain_links() -> ResultAsyncDyn<HashSet<String>> {
+    let lines = read_strings_from_clipboard()?;
+    let t = extract_links(&lines, sanitize_yt_post_url);
+    Ok(t)
+}
+
+fn read_strings_from_clipboard() -> Result<String, arboard::Error> {
     let mut clpbrd = Clipboard::new()?;
     let text = clpbrd.get_text()?;
+    println!("Прочитан текст из буфера обмена:\n{}\n", &text);
 
-    let mut res = Vec::new();
-    for line in text.split("\n") {
-        res.push(line.to_owned());
-    }
-    Ok(res)
+    Ok(text)
 }
