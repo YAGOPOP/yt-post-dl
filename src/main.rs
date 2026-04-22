@@ -1,25 +1,74 @@
 use arboard::Clipboard;
 use chrono;
+use clap::{Parser, ValueEnum};
 use linkify::{LinkFinder, LinkKind};
 use reqwest::{Client, header};
-use tokio::io::AsyncWriteExt;
 use std::collections::HashSet;
 use std::io::BufRead;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
+use tokio::io::AsyncWriteExt;
 use url::Url;
 
 type ResultAsyncDyn<T> = Result<T, Box<dyn std::error::Error + Send + Sync>>;
 
 static FILE_COUNTER: AtomicUsize = AtomicUsize::new(1);
 
+#[derive(Parser, Debug)]
+#[command(version, about)]
+struct Cli {
+    #[arg(short, long)]
+    output: Option<PathBuf>,
+
+    #[arg(short, long, value_enum, conflicts_with = "link")]
+    input: Option<InputSource>,
+
+    #[arg(short, long)]
+    link: Option<String>,
+}
+
+#[derive(Copy, Clone, Debug, ValueEnum)]
+enum InputSource {
+    #[value(name = "t")]
+    Terminal,
+    #[value(name = "c")]
+    Clipboard,
+}
+
 #[tokio::main]
 async fn main() -> ResultAsyncDyn<()> {
-    let client = Client::builder().tls_backend_native().build()?;
-    let write_dir = PathBuf::from("./obtained");
+    let cli = Cli::parse();
 
-    let links = obtain_links()?;
-    println!("Ввод обработан, скачивание...\n");
+    let write_dir = match cli.output {
+        Some(d) => d,
+        None => PathBuf::from("./obtained"),
+    };
+    match std::fs::create_dir(&write_dir) {
+        Ok(()) => println!("Создана директория: {}", write_dir.display()),
+        Err(e) => {
+            if !write_dir.is_dir() {
+                return Err(format!("{} - не является каталогом.", write_dir.display()).into());
+            } else if write_dir.exists() {
+            } else {
+                return Err(e.into());
+            }
+        }
+    }
+
+    let link_source = match cli.input {
+        Some(InputSource::Clipboard) => read_strings_from_clipboard()?,
+        Some(InputSource::Terminal) => read_strings_from_terminal()?,
+        None => read_strings_from_clipboard()?,
+    };
+    let links = extract_links(&link_source, sanitize_yt_post_url);
+
+    run(write_dir, links).await?;
+    Ok(())
+}
+
+async fn run(write_dir: PathBuf, links: HashSet<String>) -> ResultAsyncDyn<()> {
+    let client = Client::builder().tls_backend_native().build()?;
+
     let mut handles = Vec::new();
     for link in links {
         let client = client.clone();
@@ -140,6 +189,7 @@ fn extract_links(text: &str, sanitize: fn(Url) -> Option<String>) -> HashSet<Str
             res.insert(link);
         }
     }
+    
     res
 }
 
@@ -148,12 +198,11 @@ fn sanitize_yt_post_url(mut url: Url) -> Option<String> {
     if !is_domain_or_subdomain(host, "youtube.com") {
         return None;
     }
-
     if url.path_segments()?.next() != Some("post") {
         return None;
     }
-
     url.set_query(None);
+
     Some(url.as_str().to_owned())
 }
 
@@ -161,8 +210,7 @@ fn sanitize_ggpht_url(url: Url) -> Option<String> {
     if url.host_str()? != "yt3.ggpht.com" {
         return None;
     }
-
-    let str_url = url.as_str(); 
+    let str_url = url.as_str();
     let i = str_url.find("=")?;
 
     Some(format!("{}s0", &str_url[..=i]))
@@ -175,16 +223,9 @@ fn is_domain_or_subdomain(host: &str, domain: &str) -> bool {
             .is_some_and(|prefix| prefix.ends_with('.'))
 }
 
-fn obtain_links() -> ResultAsyncDyn<HashSet<String>> {
-    let lines = read_strings_from_clipboard()?;
-    let t = extract_links(&lines, sanitize_yt_post_url);
-    Ok(t)
-}
-
 fn read_strings_from_clipboard() -> Result<String, arboard::Error> {
     let mut clpbrd = Clipboard::new()?;
     let text = clpbrd.get_text()?;
     println!("Прочитан текст из буфера обмена:\n{}\n", &text);
-
     Ok(text)
 }
