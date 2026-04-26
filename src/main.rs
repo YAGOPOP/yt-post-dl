@@ -1,6 +1,7 @@
 use arboard::Clipboard;
 use chrono;
 use clap::{Parser, ValueEnum};
+use directories::UserDirs;
 use linkify::{LinkFinder, LinkKind};
 use reqwest::{Client, header};
 use std::collections::HashSet;
@@ -15,7 +16,11 @@ type ResultAsyncDyn<T> = Result<T, Box<dyn std::error::Error + Send + Sync>>;
 static FILE_COUNTER: AtomicUsize = AtomicUsize::new(1);
 
 #[derive(Parser, Debug)]
-#[command(version, about = "Скачиватель медиа из постов в сообществе YouTube.", long_about = "По умолчанию возьмёт содержимое из буфера обмена, и ,если это текст, извлечёт оттуда все ссылки на посты в сообществе YouTube и из каждого поста скачает все png/gif/jpeg.")]
+#[command(
+    version,
+    about = "Скачиватель медиа из постов в сообществе YouTube.",
+    long_about = "По умолчанию возьмёт содержимое из буфера обмена, и ,если это текст, извлечёт оттуда все ссылки на посты в сообществе YouTube и из каждого поста скачает все png/gif/jpeg."
+)]
 struct Cli {
     /// Каталог, куда сохранять результат, если не существует, будет попытка создания
     #[arg(short, long)]
@@ -24,7 +29,6 @@ struct Cli {
     /// Источник ввода терминал (t) или буфер обмена (c)
     #[arg(short, long, value_enum)]
     input: Option<InputSource>,
-
     // , conflicts_with = "link"
     // #[arg(short, long)]
     // link: Option<String>,
@@ -42,22 +46,20 @@ enum InputSource {
 async fn main() -> ResultAsyncDyn<()> {
     let cli = Cli::parse();
 
-    let write_dir = match cli.output {
+    let write_dir = match get_write_dir(cli.output) {
         Some(d) => d,
-        None => PathBuf::from("./obtained"),
-    };
-    match std::fs::create_dir(&write_dir) {
-        Ok(()) => println!("Создана директория для записи: {}", write_dir.canonicalize()?.display()),
-        Err(e) => {
-            if !write_dir.is_dir() {
-                return Err(format!("{} - не является каталогом.", write_dir.display()).into());
-            } else if write_dir.exists() {
-                println!("Файлы будут записаны в существующую директорию: {}", write_dir.canonicalize()?.display());
-            } else {
-                return Err(e.into());
+        None => {
+            let d = PathBuf::from("./obtained");
+            match std::fs::create_dir(&d) {
+                Ok(_) => {println!("{}", d.display());}
+                Err(e) => match e.kind() {
+                    std::io::ErrorKind::AlreadyExists => {},
+                    _ => println!("Не удалось найти или создать какую -либо "),
+                },
             }
+            d
         }
-    }
+    };
 
     let link_source = match cli.input {
         Some(InputSource::Clipboard) => read_strings_from_clipboard()?,
@@ -194,7 +196,7 @@ fn extract_links(text: &str, sanitize: fn(Url) -> Option<String>) -> HashSet<Str
             res.insert(link);
         }
     }
-    
+
     res
 }
 
@@ -237,7 +239,22 @@ fn read_strings_from_clipboard() -> Result<String, arboard::Error> {
 
 fn exit_on_enter_pressed() {
     print!("\nНажмите Enter, чтобы выйти...");
-    {std::io::stdout().flush().unwrap();}
+    {
+        std::io::stdout().flush().unwrap();
+    }
     let mut buf = String::new();
-    {std::io::stdin().read_line(&mut buf).unwrap();}
+    {
+        std::io::stdin().read_line(&mut buf).unwrap();
+    }
+}
+
+fn get_write_dir(input_dir: Option<PathBuf>) -> Option<PathBuf> {
+    match input_dir {
+        Some(d) => Some(d),
+        None => {
+            let usr_drs = UserDirs::new()?;
+            let a = usr_drs.download_dir()?.to_owned();
+            Some(a)
+        }
+    }
 }

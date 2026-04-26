@@ -7,6 +7,7 @@ edition = "2024"
 arboard = { version = "3.6.1", features = ["wayland-data-control"] }
 chrono = "0.4.44"
 clap = { version = "4.6.1", features = ["derive"] }
+directories = "6.0.0"
 linkify = "0.11.0"
 reqwest = { version = "0.13.2",  default-features = false, features = ["blocking", "native-tls"] }
 tokio = {version = "1.52.1", features = ["full"]}
